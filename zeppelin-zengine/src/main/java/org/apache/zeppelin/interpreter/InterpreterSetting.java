@@ -36,6 +36,7 @@ import org.apache.zeppelin.interpreter.launcher.InterpreterLaunchContext;
 import org.apache.zeppelin.interpreter.launcher.InterpreterLauncher;
 import org.apache.zeppelin.interpreter.launcher.ShellScriptLauncher;
 import org.apache.zeppelin.interpreter.launcher.SparkInterpreterLauncher;
+import org.apache.zeppelin.interpreter.launcher.SparkK8SInterpreterLauncher;
 import org.apache.zeppelin.interpreter.lifecycle.NullLifecycleManager;
 import org.apache.zeppelin.interpreter.recovery.NullRecoveryStorage;
 import org.apache.zeppelin.interpreter.recovery.RecoveryStorage;
@@ -294,9 +295,16 @@ public class InterpreterSetting {
     this.conf = o.getConf();
   }
 
-  private void createLauncher() {
+  private void createLauncher(Properties properties) {
     if (group.equals("spark")) {
-      this.launcher = new SparkInterpreterLauncher(this.conf, this.recoveryStorage);
+      String deployMode = properties.getProperty("spark.submit.deployMode");
+      String masterUrl = properties.getProperty("master");
+      if (deployMode != null && deployMode.equals("cluster") &&
+        masterUrl != null && masterUrl.startsWith("k8s://")) {
+        this.launcher = new SparkK8SInterpreterLauncher(this.conf, this.recoveryStorage);
+      } else {
+        this.launcher = new SparkInterpreterLauncher(this.conf, this.recoveryStorage);
+      }
     } else {
       this.launcher = new ShellScriptLauncher(this.conf, this.recoveryStorage);
     }
@@ -677,9 +685,8 @@ public class InterpreterSetting {
   List<Interpreter> createInterpreters(String user, String interpreterGroupId, String sessionId) {
     List<Interpreter> interpreters = new ArrayList<>();
     List<InterpreterInfo> interpreterInfos = getInterpreterInfos();
-    Properties intpProperties = getJavaProperties();
     for (InterpreterInfo info : interpreterInfos) {
-      Interpreter interpreter = new RemoteInterpreter(intpProperties, sessionId,
+      Interpreter interpreter = new RemoteInterpreter(getJavaProperties(), sessionId,
           info.getClassName(), user, lifecycleManager);
       if (info.isDefaultInterpreter()) {
         interpreters.add(0, interpreter);
@@ -689,7 +696,7 @@ public class InterpreterSetting {
       LOGGER.info("Interpreter {} created for user: {}, sessionId: {}",
           interpreter.getClassName(), user, sessionId);
     }
-    interpreters.add(new ConfInterpreter(intpProperties, interpreterGroupId, this));
+    interpreters.add(new ConfInterpreter(getJavaProperties(), interpreterGroupId, this));
     return interpreters;
   }
 
@@ -698,7 +705,7 @@ public class InterpreterSetting {
                                                                  Properties properties)
       throws IOException {
     if (launcher == null) {
-      createLauncher();
+      createLauncher(properties);
     }
     InterpreterLaunchContext launchContext = new
         InterpreterLaunchContext(properties, option, interpreterRunner, userName,
@@ -900,13 +907,6 @@ public class InterpreterSetting {
               // in case user forget to specify type in interpreter-setting.json
           );
           newProperties.put(key, property);
-        } else if (value instanceof String) {
-          InterpreterProperty newProperty = new InterpreterProperty(
-              key,
-              value,
-              "string");
-
-          newProperties.put(newProperty.getName(), newProperty);
         } else {
           throw new RuntimeException("Can not convert this type of property: " +
               value.getClass());
